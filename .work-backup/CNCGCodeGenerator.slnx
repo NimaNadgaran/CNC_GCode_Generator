@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="CNCGCodeGenerator/CNCGCodeGenerator.csproj" />
+  <Project Path="setup/setup.vdproj" Type="Installer" />
+</Solution>

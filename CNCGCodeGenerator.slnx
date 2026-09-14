@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="CNCGCodeGenerator.Core/CNCGCodeGenerator.Core.csproj" />
+  <Project Path="CNCGCodeGenerator.Tests/CNCGCodeGenerator.Tests.csproj" />
+  <Project Path="CNCGCodeGenerator/CNCGCodeGenerator.csproj" />
+  <Project Path="setup/setup.vdproj" Type="Installer" />
+</Solution>

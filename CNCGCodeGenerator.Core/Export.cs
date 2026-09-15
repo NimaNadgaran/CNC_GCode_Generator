@@ -7,33 +7,34 @@ public sealed class PreviewSession
     public ValidatedProgram? Current { get; private set; }
     public ExportAudit? LastExport { get; private set; }
     public void Invalidate() => Current = null;
-    public ValidatedProgram Generate(GrindingRequest request, MachineProfile profile)
+    public ValidatedProgram Generate(GrindingRequest request)
     {
         Invalidate();
-        Current = GenerationService.Generate(request, profile);
+        Current = GenerationService.Generate(request);
         return Current;
     }
-    public void Export(string path, bool overwriteConfirmed)
+    public void Export(string path, bool overwriteConfirmed, bool safetyConfirmed = false)
     {
+        if (!safetyConfirmed) throw new ValidationException("Export", "Safety confirmation", "Confirm that the start position, travel direction and clearances were verified on the machine.");
         var snapshot = Current ?? throw new ValidationException("Export", "Preview", "Generate and review the current inputs first.");
         if (!string.Equals(Path.GetFileName(path), snapshot.FileName, StringComparison.Ordinal))
             throw new ValidationException("Export", "File name", $"The validated filename is {snapshot.FileName}; change the program name and revalidate to rename it.");
         try
         {
             AtomicFile.Write(path, Encoding.ASCII.GetBytes(snapshot.GCode), overwriteConfirmed);
-            LastExport = new(GenerationService.Version, snapshot.ProfileJson, snapshot.Request,
+            LastExport = new(GenerationService.Version, snapshot.Request,
                 snapshot.Report, snapshot.Sha256, Path.GetFullPath(path), true, null);
         }
         catch (Exception ex)
         {
-            LastExport = new(GenerationService.Version, snapshot.ProfileJson, snapshot.Request,
+            LastExport = new(GenerationService.Version, snapshot.Request,
                 snapshot.Report, snapshot.Sha256, Path.GetFullPath(path), false, ex.Message);
             throw;
         }
     }
 }
 
-public sealed record ExportAudit(string ApplicationVersion, string ProfileJson, GrindingRequest InputSnapshot,
+public sealed record ExportAudit(string ApplicationVersion, GrindingRequest InputSnapshot,
     string ValidationReport, string ProgramSha256, string ExportPath, bool Success, string? Failure);
 
 public static class AtomicFile

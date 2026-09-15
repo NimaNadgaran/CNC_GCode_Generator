@@ -4,14 +4,7 @@ using System.Text.RegularExpressions;
 namespace CNCGCodeGenerator.Core;
 
 public enum Axis { X, Y, Z, V }
-public enum CoordinateMode { Absolute, Incremental }
-public enum CrossStepTiming { AfterStroke, AfterRoundTrip }
-public enum TableDirection { Right, Left }
-public enum Provenance
-{
-    ManufacturerConfirmed, ControllerManualConfirmed, ExistingProgramConfirmed,
-    OperatorObserved, OperatorEntered, Assumed, Unknown
-}
+public enum CoordinateMode { Absolute }
 
 public sealed record ValidationIssue(string Category, string Field, string Message)
 {
@@ -53,7 +46,7 @@ public static class Numeric
     }
 }
 
-public sealed record AxisPosition(decimal X, decimal Y, decimal Z, decimal V)
+public sealed record AxisPosition(decimal X, decimal Y, decimal Z, decimal V = 0)
 {
     public decimal this[Axis axis] => axis switch { Axis.X => X, Axis.Y => Y, Axis.Z => Z, Axis.V => V, _ => throw new ArgumentOutOfRangeException(nameof(axis)) };
     public AxisPosition With(Axis axis, decimal value) => axis switch
@@ -80,15 +73,26 @@ public sealed record GrindingRequest
     public int RoughingSweeps { get; init; }
     public int FinishingSweeps { get; init; }
     public int SparkOutRoundTrips { get; init; }
-    public TableDirection FirstXDirection { get; init; }
-    public CoordinateMode CoordinateMode { get; init; }
-    public CrossStepTiming CrossStepTiming { get; init; }
+    public CoordinateMode CoordinateMode { get; init; } = CoordinateMode.Absolute;
     public bool CoolantEnabled { get; init; }
     public bool DressingEnabled { get; init; }
     public string ProgramName { get; init; } = "";
-    public string OperatorNotes { get; init; } = "";
-    public string SetupReview { get; init; } = "";
+    public string ProgramComment { get; init; } = "";
 }
 
 public sealed record Motion(Axis Axis, AxisPosition TargetMm, decimal FeedMmPerMinute);
 public sealed record MotionPlan(AxisPosition StartMm, IReadOnlyList<Motion> Motions);
+
+public static class TextValidation
+{
+    public static void Comment(string text, string field)
+    {
+        if (text is null || text.Length > 200 || text.Any(c => c < 32 || c > 126 || c is ';' or '%' or '(' or ')' || c is '\r' or '\n'))
+            throw new ValidationException("Input", field, "Use at most 200 printable ASCII characters without executable delimiters.");
+    }
+    public static void ProgramName(string name)
+    {
+        if (name is null || !Regex.IsMatch(name, @"\A[0-9]{6}\z"))
+            throw new ValidationException("Input", "ProgramName", "Require a six-digit numeric Fagor program number.");
+    }
+}

@@ -1,6 +1,7 @@
 using CNCGCodeGenerator.Core;
 using Microsoft.Win32;
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 
@@ -10,50 +11,56 @@ public partial class MainWindow : Window
 {
     private readonly PreviewSession session = new();
     private OperationSettings operation = new();
-    private MachineProfile profile = MachineProfile.Unknown();
     private string language = "en";
-    private string? profileLoadError;
-    internal static string ProfilePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CNCGCodeGenerator", "machine-profile.json");
+    private string? settingsLoadWarning;
 
     public MainWindow()
     {
         InitializeComponent();
         try
         {
-            if (File.Exists(ProfilePath)) profile = ProfilePersistence.Deserialize(File.ReadAllText(ProfilePath));
+            var saved = UserSettingsStore.Load(UserSettingsStore.DefaultPath);
+            operation = saved.Operation;
+            language = saved.Language;
+            XInput.Text = saved.XTravel;
+            YInput.Text = saved.YDownfeed;
+            ZInput.Text = saved.ZCoverage;
+            Danobat30106AConfig.YDownSign = saved.YDownSign;
+            Danobat30106AConfig.ZInitialCrossSign = saved.ZInitialCrossSign;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ValidationException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
         {
-            profileLoadError = ex.Message;
+            settingsLoadWarning = "Saved settings could not be loaded; blank safety-critical start coordinates are required.";
         }
         XInput.TextChanged += InputChanged;
         YInput.TextChanged += InputChanged;
         ZInput.TextChanged += InputChanged;
         UpdateLanguage();
+        UpdateYDownfeedAvailability();
         InvalidatePreview();
     }
 
-    private void InputChanged(object sender, TextChangedEventArgs e) => InvalidatePreview();
+    private void InputChanged(object sender, TextChangedEventArgs e) { SaveUserSettings(); InvalidatePreview(); }
+    private void SafetyCheck_Changed(object sender, RoutedEventArgs e) => SaveButton.IsEnabled = session.Current is not null && SafetyCheck.IsChecked == true;
     private void InvalidatePreview()
     {
         session.Invalidate();
         GCodeOutput.Clear();
         SaveButton.IsEnabled = false;
-        StatusText.Text = profileLoadError is null
-            ? "Operator review required. Machine interlocks and physical setup are not simulated."
-            : "Blocking profile-load error: " + profileLoadError;
+        SafetyCheck.IsChecked = false;
+        StatusText.Text = settingsLoadWarning ?? "Operator review required. Machine interlocks and physical setup are not simulated.";
     }
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
         InvalidatePreview();
-        var window = new SettingsWindow(operation, profile, language) { Owner = this };
+        var window = new SettingsWindow(operation, language) { Owner = this };
         if (window.ShowDialog() != true) return;
         operation = window.Operation;
-        profile = window.Profile;
         language = window.SelectedLanguage;
-        profileLoadError = null;
+        SaveUserSettings();
         UpdateLanguage();
+        UpdateYDownfeedAvailability();
         InvalidatePreview();
     }
 
@@ -62,18 +69,17 @@ public partial class MainWindow : Window
         InvalidatePreview();
         try
         {
-            if (profileLoadError is not null) throw new ValidationException("Profile", "Load", profileLoadError);
             var request = operation.CreateRequest(XInput.Text, YInput.Text, ZInput.Text);
-            var result = session.Generate(request, profile);
+            var result = session.Generate(request);
             GCodeOutput.Text = result.Report + Environment.NewLine + "SHA-256: " + result.Sha256 +
                 Environment.NewLine + "--- G-CODE ---" + Environment.NewLine + result.GCode;
-            SaveButton.IsEnabled = true;
-            StatusText.Text = "Validation passed for configured limits. Review the full report and code before export.";
+            SaveButton.IsEnabled = SafetyCheck.IsChecked == true;
+            StatusText.Text = "Validation passed for configured inputs. Review every block and confirm the machine setup before export.";
         }
         catch (ValidationException ex)
         {
             GCodeOutput.Text = "EXPORT BLOCKED" + Environment.NewLine + ex.Message;
-            StatusText.Text = "Blocking error / unconfirmed machine data. Export unavailable.";
+            StatusText.Text = "Blocking validation error. Export unavailable.";
         }
         catch (Exception ex)
         {
@@ -102,7 +108,7 @@ public partial class MainWindow : Window
         if (MessageBox.Show(this, question, "Confirm export", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
         try
         {
-            session.Export(dialog.FileName, overwrite);
+            session.Export(dialog.FileName, overwrite, SafetyCheck.IsChecked == true);
             StatusText.Text = "Exported " + snapshot.Sha256 + " to " + dialog.FileName;
         }
         catch (Exception ex)
@@ -116,6 +122,28 @@ public partial class MainWindow : Window
     private void ClearButton_Click(object sender, RoutedEventArgs e)
     {
         XInput.Clear(); YInput.Clear(); ZInput.Clear(); InvalidatePreview();
+    }
+
+    private void SaveUserSettings()
+    {
+        try
+        {
+            UserSettingsStore.Save(UserSettingsStore.DefaultPath, operation, XInput.Text, YInput.Text, ZInput.Text, language, Danobat30106AConfig.YDownSign, Danobat30106AConfig.ZInitialCrossSign);
+            settingsLoadWarning = null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            settingsLoadWarning = "Settings could not be saved. They will not be available after restart.";
+            System.Diagnostics.Trace.TraceError(ex.ToString());
+        }
+    }
+
+    private void UpdateYDownfeedAvailability()
+    {
+        var roughingIsZero = decimal.TryParse(operation.Values["Roughing"], System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var roughing) && roughing == 0;
+        if (roughingIsZero) YInput.Text = "0";
+        YInput.IsEnabled = !roughingIsZero;
+        YInput.Opacity = roughingIsZero ? 0.6 : 1.0;
     }
 
     private void UpdateLanguage()
